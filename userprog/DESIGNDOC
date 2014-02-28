@@ -1,0 +1,378 @@
+		     +--------------------------+
+		     |		CS 140		|
+		     | PROJECT 2: USER PROGRAMS	|
+		     |     DESIGN DOCUMENT	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Adeline Wong <adelinew@alumni.stanford.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+I received some help from Li-Chang Cheng debugging the system calls.
+
+   	 	    ARGUMENT PASSING
+		    ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+Unchanged.
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+strtok_r() is convenient for tokenizing the command line. Unfortunately,
+the stack needs to be set up with the last argument first, which means that
+if we want to utilize strtok_r(), we need to tokenize the arguments until
+we get to the end, then remember everything that came before. This chunk
+of the work lives in load(), which parses the command line using strtok_r()
+and stores the arguments in a malloc'ed block of memory (which I named
+argv), as well as its length (which I named argc). I use malloc in order not
+to waste a huge amount of space on the stack storing arguments as local
+variables.
+
+setup_stack() then takes argv and argc as arguments as sets up
+the stack according to the requirements in "3.5.1 Program Startup Details."
+First, we read the arguments from the end of argv to the front, and for each
+argument strlcpy() the argument into a space vacated by the stack pointer,
+then copy the address the stack pointer is pointing to back into argv.
+At the same time, we keep a running total of the length of the copied arguments,
+including the null terminator. If the running total is not a multiple of 4,
+we pad with the appropriate number of null characters. Then we vacate 1
+address and then iterate again through argv in reverse order and memcpy()
+the addresses into 4-byte spaces vacated by the stack pointer. Finally, we
+copy in argc and leave one address of space for the fake return address.
+
+I avoid overflowing the stack page by limiting the number of characters in
+the command line to 700 characters. The stack page is 4096 bytes long. The
+theoretical maximum number of allowable characters in the worst case is
+about 1360 characters because because in the worst case, each argument is
+1 character long. If there are 680 1-character arguments, there need to be
+680 null characters to terminate strings, 680 * 4 = 2720 bytes for pointers
+to the first character of arguments (i.e. the argv array), and 4 bytes for
+intc, 4 bytes for the intc'th entry of argv, and 4 bytes for the return
+address. This gives a grand total of 680 + 680 + 2720 + 4 + 4 + 4 = 4092 bytes.
+To leave space for local variables, I decided to limit the command line to
+700 characters, which is about half of the 1360-character theoretical maximum.
+For all intents and purposes, this is plenty long for a command line.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+There's nothing stopping Pintos from implementing strtok(), but it won't
+very useful because strtok() isn't thread-safe. strtok() maintains an internal
+state for the thread it is tokenizing. This means that when the string being
+tokenized changes, for instance, when the execution switches to another thread
+that does string tokenizing, then you lose all the state information you had on
+the string in the old thread.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+One advantage of the Unix approach is safety. It really isn't necesary to be
+in kernel mode to parse arguments, so might as well outsource this work to
+user mode. Then errors parsing arguments couldn't cause catastrophic failures
+to the operating system itself, which could disrupt other programs or users.
+And since arguments are user-provided data, the kernel would be safe from
+any potential malicious user attacks on protected kernel memory.
+
+A second advantage of the Unix approach is that it makes implementing things
+like pipes, redirections, and wildcard characters easier. The shell should
+already know how to parse arguments and hand the information to the shell to
+set up the stack. It shouldn't be too hard to ask the shell to also know how
+to parse certain special characters and pass the parsed arguments to the shell
+as separate calls. If the kernel were to do this, we would need to write code
+to create multipel stacks in one shot, which is unnecessarily painful.
+
+   			      SYSTEM CALLS
+			      ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+Added to struct thread:
+
+    struct thread *parent;              /* Parent process. */
+    struct hash *children;              /* Spawned child processes. */
+    struct lock child_lock;             /* Lock protecting children hashtable. */
+    bool child_ready;                   /* True if a child process has started.
+                                           Used to synchronize between exec() and load(). */
+    struct condition child_cond;        /* Conditional variable for child_ready. */ 
+    struct hash *open_files;            /* Files opened by this process. */ 
+    struct lock open_files_lock;        /* Lock protecting open_files hashtable. */
+    struct file *my_executable;         /* Executable file this process is running. */   
+
+Added struct child to thread.h:
+
+    /* Representation of thread's spawned child process. */
+    struct child
+      {
+        tid_t pid;                  /* The process ID. */
+        bool done;                  /* Whether process execution is complete. */
+        int exit_status;            /* If process is done, its exit status. */
+        struct hash_elem elem;      /* Hashtable element. */
+      };
+
+Added global variable to syscall.c:
+
+    /* File system lock. Currently, the file system does not provide internal
+    synchronization, so this will have to suffice. */
+    struct lock filesys_lock;
+
+Added to struct file:
+
+    int fd;                         /* File descriptor. */
+    struct hash_elem elem;          /* Hashtable element. */
+
+In addition, struct file was moved form file.c to file.h.
+
+Added global variable to file.c:
+
+    /* Global file descriptor counter. */
+    int fd_counter = 3;
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+I added an int fd file descriptor field to struct file. The global
+file descriptor counter fd_counter increments every time a new file
+is opened and assigns the value to the fd field in struct file. File
+descriptors are therefore unique within the entire OS.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+When the user makes a syscall, control passes to the syscall_handler().
+This function contains a switch statement that matches the user's syscall's
+number to the appropriate syscall implementation. It also takes the
+stack pointer and parses the appropriate number and type (using fun
+pointer arithmetic!) of arguments into the argument list for the syscall
+implementation.
+
+The filesys file system code already contains file_read() and file_write()
+functions, but these do not check their arguments for validity. The read()
+and write() implementations take in a file descriptor int, a buffer void *,
+and an initial_size unsigned integer. So the first thing read() and write() do
+are check that the buffer is valid by crawling through the length of buffer,
+byte-by-byte, and checking that they map to mapped user memory.
+
+After this, if write() sees that its file descriptor is 1, then it prints
+to stdout using putbuf(). In the case of read(), if its file descriptor is 0,
+it reads from stdin using intput_getc().
+
+After that, read() and write() call the lookup_file() helper function, passing
+in the file descriptor. Either lookup_file() returns a file struct, or it
+returns NULL for no file being found. Since file descriptors are allocated
+starting from 3, if write() passes in file descriptor 0 or 2, or read() passes
+in 0, 1, or 2, no matching file will be found and the functions with both
+error appropriately.
+
+Finally, if a matching file is found, file_write() or file_read() will
+be called, as appropriate.
+
+The number of bytes read or written is returned to the caller in the EAX
+register.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+If a system call causes a full page of data to be copied, the greatest
+number of inspections is 4096 inspections, one inspection for each byte.
+The smallest number is 2, once for the first byte of the data and once
+for the last byte. This is because memory is allocated one page at a
+time, so if both bytes are valid, either the first byte corresponds exactly
+with the start of a page, or the first byte is contained in the middle of
+a valid page and so is the last byte. In either case, the whole data range
+is valid.
+
+If only 2 bytes of data are copied, then the most and least lookups
+required is 2. In the worst case, all 2 bytes are checked. In the worst
+case, both the first and last byte are checked.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+Please see B8. I think the explanation there covers this question, too.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+In syscall_handler() I use a switch statement to pass control to the
+appropriate handlers. Here, the emphasis is on where control passes,
+so I do not perform any checks and delegate that responsibility to the
+individual syscall handlers. However, if the syscall number is invalid,
+I fall through to the default case and kill the user process with exit (-1).
+
+In the syscall handlers, in order not to obscure the primary function
+of the code, I use the convention that checks are performed
+before reaching the main computational step of that syscall, and special
+cases are handled before the general case.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+The parent thread contains a child_ready bool, which is initialized to
+false, as well as a lock and condition variable to protect the bool.
+exec() acquires the lock before calling process_execute() on a file,
+which then spawns a child process. Then the parent calls cond_wait(),
+waiting for child_ready to be set to true.
+
+In process.c, the user process acquires the lock and after the user
+program has loaded (i.e. start_process() returns from calling load()),
+then the child_ready is set to true, cond_signal() is called, and the
+lock is relased.
+
+When cond_signal() is called by the child, the parent process wakes up,
+resets child_ready to false, and releases the lock. Finally, it either
+returns the pid (tid) returned by thread_create() called in
+process_execute() to the user program, or else load() failed, and as a
+result, exit(-1) has already been called in start_process(), before
+a pid could be returned by process_execute().
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+I use a lock and condition variable to prevent race conditions and
+ensure proper synchronization.
+
+P keeps track of its children as child structs in its children
+hashtable, and each child struct contains a done boolean to register
+that a child has completed running. This boolean is initialized to false.
+There are also a lock and a condition variable. When P calls wait(C) after
+C exits, then done will be true in the child struct, so P can immediately
+grabs the exit_status from the child struct and deletes the child struct
+from children.
+
+When P calls wait(C) after C exts, then the done boolean will be
+false. In this case, P calls process_wait() and then calls cond_wait()
+to wait for the child to complete execution. When the child is complete,
+it sets done to true and puts its exit status in the exit_status field.
+Setting this field is necessary because the child process will die, so
+its exit status is lost unless it is stored somewhere in memory. Then the child
+calls cond_signal() to wake up its parent. Finally, P wakes up, gets
+the exit_status from the child struct and deletes the child struct.
+
+My implementation doesn't work when P terminates before C. The fix is
+to set the parent field to NULL in all of P's children, when P dies.
+Also, one needs to add a check to C to check that its parent field is
+not NULL and only set done and exit_status in this case. Since there is
+no P, the children hashtable no longer exists, so child structs do
+not have to be deleted in this case.
+
+There are no special cases because I use locks to prevent inconsistent
+states.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+Because it is easier to implement. On the other hand, I have to check
+user pointers in each syscall.
+
+The alternative pagefault implementation has the advantage that it can
+be implemented once and one never has to worry about user pointers
+again, but this is trickier to implement.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+The basic design has the advantage that it is simple -- file descriptors
+are allocated by incrementing by one, and file descriptors are matched
+to their files by inhabiting the file struct.
+
+My design is also safe because even if a rogue process holds file
+descriptor 50, all it knows is that file descriptors 3 thru 49 have
+been allocated, but because files live in a thread's open_files struct
+and the rogue process cannot inspect the all_list, the rogue process
+can't touch these files.
+
+The design has the disadvantage that it uses up file descriptors slightly
+faster than if file descriptors were unique per thread. But 2^32 - 3
+file descriptors should be plenty for an entire OS.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+I used the default mapping.
+
+      	     SURVEY QUESTIONS
+	     ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+This assignment was an appropriate level of difficulty, but it was nerve-wracking
+because you won't start earning points from tests passing until argument passing
+and process termination messages are implemented, which is at least half of the
+assignment. It also seemed to be quite long. Maybe this assignment could be given
+3 weeks to complete instead of the next one?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+It might have been helpful to highlight in the TA session that syscall_handler()
+puts its return values in the EAX register.
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?

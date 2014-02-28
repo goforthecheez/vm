@@ -3,6 +3,11 @@
 
 #include <stdbool.h>
 #include "filesys/off_t.h"
+#include "threads/synch.h"
+
+/* File system lock. Currently, the file system does not provide internal
+   synchronization, so this will have to suffice. */
+struct lock filesys_lock;
 
 /* Sectors of system file inodes. */
 #define FREE_MAP_SECTOR 0       /* Free map file inode sector. */

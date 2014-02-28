@@ -100,12 +100,15 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
     struct thread *parent;              /* Parent process. */ 
     struct hash *children;              /* Spawned child processes. */
-    struct lock child_lock;             /* Lock protecting children hashtable. */
-    bool child_ready;                   /* True if a child process has started. */
-    struct condition child_cond;        /* Conditional variable for child_ready. */
+    struct lock child_lock;             /* Lock protecting children
+                                           hashtable. */
+    bool child_ready;                   /* True if a child process has
+                                           started. */
+    struct condition child_cond;        /* Conditional variable for
+                                           child_ready. */
     struct hash *open_files;            /* Files opened by this process. */
-    struct lock open_files_lock;        /* Lock protecting open_files hashtable. (not needed?) */
-    struct file *my_executable;         /* Executable file this process is running. */
+    struct file *my_executable;         /* Executable file this process is
+                                           running. */
 #endif
 
     /* Owned by thread.c. */

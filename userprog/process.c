@@ -506,8 +506,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
-/* Creates a user stack, according to the convention described in "3.5.1 Program
-   Startup Details." */
+/* Creates a user stack, according to the convention described in
+   "3.5.1 Program Startup Details." */
 static bool
 setup_stack (void **esp, char **argv, int argc) 
 {
@@ -531,7 +531,8 @@ setup_stack (void **esp, char **argv, int argc)
               total_len += len;
               *esp = (char *)*esp - len;
               strlcpy (*esp, argv[i], len);
-              argv[i] = *esp;                  // Save address of first char of argv[i]
+              argv[i] = *esp;                  // Save address of first char
+                                               // of argv[i]
             }
 
           /* Correct word-alignment */
@@ -542,7 +543,8 @@ setup_stack (void **esp, char **argv, int argc)
             *esp = (char *)*esp - 1;
 
           /* Push pointers to args onto the stack. */
-          *esp = (int *)*esp - 1;              // NULL pointer for argc'th index
+          *esp = (int *)*esp - 1;              // NULL pointer for argc'th
+                                               // index
           for (i = argc - 1; i >= 0; i--)
             {
               *esp = (int *)*esp - 1;

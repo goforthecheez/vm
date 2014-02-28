@@ -118,7 +118,8 @@ exit (int status)
   lock_acquire (&t->parent->child_lock);
   struct child c;
   c.pid = t->tid;;
-  struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
+  struct child *found_child = hash_entry (hash_find (t->parent->children,
+                                                     &c.elem),
                                           struct child, elem);
   found_child->done = true;
   found_child->exit_status = status;
@@ -128,9 +129,9 @@ exit (int status)
   thread_exit ();
 }
 
-/* Runs the executable whose name is given in cmd_line, passing any given arguments,
-   and returns the new process's program id (pid). If the program cannot load or run
-   for any reason, returns -1. */
+/* Runs the executable whose name is given in cmd_line, passing any given
+   arguments, and returns the new process's program id (pid). If the program
+   cannot load or run for any reason, returns -1. */
 pid_t
 exec (const char *cmd_line)
 {
@@ -179,8 +180,8 @@ wait (pid_t pid)
   return exit_status;
 }
 
-/* Creates a new file initially initial_size bytes in size. Returns true
-   if successful, false otherwise. Note the creating a file does not open it. */
+/* Creates a new file initially initial_size bytes in size. Returns true if
+   successful, false otherwise. Note the creating a file does not open it. */
 bool
 create (const char *file, unsigned initial_size)
 {
@@ -219,17 +220,12 @@ open (const char *file)
   if (pagedir_get_page (t->pagedir, file) == NULL)
     exit (-1);
 
-  lock_acquire (&t->open_files_lock);
   lock_acquire (&filesys_lock);
   struct file *f = filesys_open (file);
   lock_release (&filesys_lock);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       return -1;
-    }
   hash_insert (t->open_files, &f->elem);
-  lock_release (&t->open_files_lock);
 
   return f->fd;
 }
@@ -238,20 +234,13 @@ open (const char *file)
 int
 filesize (int fd)
 {
-  struct thread *t = thread_current ();
-
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   lock_acquire (&filesys_lock);
   int len = file_length (f);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 
   return len;
 }
@@ -275,18 +264,13 @@ read (int fd, void *buffer, unsigned size)
       return i;
     }
 
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   lock_acquire (&filesys_lock);
   int bytes_read = file_read (f, buffer, size);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 
   return bytes_read;
 }
@@ -309,18 +293,13 @@ write (int fd, const void *buffer, unsigned size)
       return size;
     }
 
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   lock_acquire (&filesys_lock);
   int bytes_written = file_write (f, buffer, size);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 
   return bytes_written;
 }
@@ -331,20 +310,13 @@ write (int fd, const void *buffer, unsigned size)
 void
 seek (int fd, unsigned position)
 {
-  struct thread *t = thread_current ();
-
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   lock_acquire (&filesys_lock);
   file_seek (f, position);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 }
 
 /* Returns the position of the next byte to be read or written in open
@@ -352,20 +324,13 @@ seek (int fd, unsigned position)
 unsigned
 tell (int fd)
 {
-  struct thread *t = thread_current ();
-
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   lock_acquire (&filesys_lock);
   unsigned pos = file_tell (f);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 
   return pos;
 }
@@ -381,13 +346,9 @@ void close (int fd)
   if (fd == 0 || fd == 1 || fd == 2)
     exit (-1);
 
-  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
   if (f == NULL)
-    {
-      lock_release (&t->open_files_lock);
       exit (-1);
-    }
 
   /* If the lookup succeeded, delete the file from open_files. */
   struct file lookup;
@@ -396,7 +357,6 @@ void close (int fd)
   lock_acquire (&filesys_lock);
   file_close (f);
   lock_release (&filesys_lock);
-  lock_release (&t->open_files_lock);
 }
 
 /* Verify that the passed syscall arguments are valid pointers.

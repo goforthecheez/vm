@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -14,7 +15,6 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #ifdef USERPROG
-#include "userprog/syscall.h"
 #include "userprog/process.h"
 #endif
 
@@ -125,8 +125,8 @@ thread_start (void)
 
   /* Now that interrupts have been enabled, initialize the
      initial thread's children and open_files hashtables. */
-  initial_thread->children = palloc_get_page (0);
-  initial_thread->open_files = palloc_get_page (0);
+  initial_thread->children = (struct hash *)malloc (sizeof (struct hash));
+  initial_thread->open_files = (struct hash *)malloc (sizeof (struct hash));
   hash_init (initial_thread->children, child_hash_hash_func,
              child_hash_less_func, NULL);
   hash_init (initial_thread->open_files, file_hash_hash_func,
@@ -225,8 +225,8 @@ thread_create (const char *name, int priority,
       t->parent = thread_current ();
 
       /* Initialize hashtables. */
-      t->children = palloc_get_page (0);
-      t->open_files = palloc_get_page (0); 
+      t->children = (struct hash *)malloc (sizeof (struct hash));
+      t->open_files = (struct hash *)malloc (sizeof (struct hash));
       hash_init (t->children, child_hash_hash_func,
                  child_hash_less_func, NULL);
       hash_init (t->open_files, file_hash_hash_func,
@@ -323,18 +323,19 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
 
+  /* Indicate to the parent that the current process is done. */
   struct thread *t = thread_current ();
-  hash_destroy (t->children, hash_destroy_child);
-  hash_destroy (t->open_files, NULL);//hash_destroy_file);
-  palloc_free_page (t->children);
-  //palloc_free_page (t->open_files);
-
   struct child c;
   c.pid = t->tid;
   struct hash_elem *e = hash_find (t->parent->children, &c.elem);
   struct child *found_child = hash_entry (e, struct child, elem);
   found_child->done = true;
 
+  /* Free the current thread. */
+  hash_destroy (t->children, hash_destroy_child);
+  hash_destroy (t->open_files, hash_destroy_file);
+  free (t->children);
+  free (t->open_files);
   if (t->my_executable != NULL)
     file_close (t->my_executable);
 #endif
@@ -567,7 +568,6 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init (&t->child_lock);
   t->child_ready = false;
   cond_init (&t->child_cond);
-  lock_init (&t->open_files_lock);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

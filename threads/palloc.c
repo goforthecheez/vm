@@ -8,7 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "threads/loader.h"
+#include "threads/malloc.h"
+#include "threads/pte.h"
 #include "threads/synch.h"
+#include "threads/thread.h"
 #include "threads/vaddr.h"
 
 /* Page allocator.  Hands out memory in page-size (or
@@ -28,9 +31,20 @@
 /* A memory pool. */
 struct pool
   {
-    struct lock lock;                   /* Mutual exclusion. */
-    struct bitmap *used_map;            /* Bitmap of free pages. */
-    uint8_t *base;                      /* Base of pool. */
+    struct lock lock;                    /* Mutual exclusion. */
+    struct bitmap *used_map;             /* Bitmap of free pages. */
+    uint8_t *base;                       /* Base of pool. */
+    struct frame_table_entry *entries;  /* Array of frame table
+                                            entries. */
+  };
+
+/* Each frame table entry contains the virtual page mapped to it. */
+struct frame_table_entry
+  {
+    bool valid;            /* If true, the frame has been allocated
+                              and the frame contents are valid. */
+    tid_t pid;             /* PID of the owner process. */
+    uint32_t pte;          /* Page table entry belonging to pid. */
   };
 
 /* Two pools: one for kernel data, one for user pages. */
@@ -79,7 +93,6 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
 
   lock_acquire (&pool->lock);
   page_idx = bitmap_scan_and_flip (pool->used_map, 0, page_cnt, false);
-  lock_release (&pool->lock);
 
   if (page_idx != BITMAP_ERROR)
     pages = pool->base + PGSIZE * page_idx;
@@ -96,6 +109,20 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
       if (flags & PAL_ASSERT)
         PANIC ("palloc_get: out of pages");
     }
+
+  /* Create page table entries for the allocated user pages. */
+  if (pool == &user_pool)
+    {
+      unsigned i;
+      for (i = 0; i < page_cnt; i++)
+        {
+          struct frame_table_entry *fte = &(pool->entries[page_idx + i]);
+          fte->valid = true;
+          fte->pid = thread_current ()->tid;
+          fte->pte = pte_create_user (pages + PGSIZE * i, true);
+	}
+    }
+  lock_release (&pool->lock);
 
   return pages;
 }
@@ -133,6 +160,17 @@ palloc_free_multiple (void *pages, size_t page_cnt)
 
   page_idx = pg_no (pages) - pg_no (pool->base);
 
+  /* Invalidate the frame table entries for the deallocated user pages. */
+  if (pool == &user_pool)
+    {
+      unsigned i;
+      for (i = 0; i < page_cnt; i++)
+        {
+          struct frame_table_entry *fte = &(pool->entries[page_idx + i]);
+          fte->valid = false;
+        }
+    }
+
 #ifndef NDEBUG
   memset (pages, 0xcc, PGSIZE * page_cnt);
 #endif
@@ -167,6 +205,13 @@ init_pool (struct pool *p, void *base, size_t page_cnt, const char *name)
   lock_init (&p->lock);
   p->used_map = bitmap_create_in_buf (page_cnt, base, bm_pages * PGSIZE);
   p->base = base + bm_pages * PGSIZE;
+
+  /* We only want to keep track of user pool frames. */
+  if (p == &user_pool)
+      p->entries = (struct frame_table_entry *)malloc (
+          page_cnt * sizeof (struct frame_table_entry));
+  else
+    p->entries = NULL;
 }
 
 /* Returns true if PAGE was allocated from POOL,

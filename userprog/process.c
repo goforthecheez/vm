@@ -524,7 +524,7 @@ setup_stack (void **esp, char **argv, int argc)
               sizeof (struct sup_page_table_entry));
       uint8_t *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
       spte->upage = upage;
-      spte->pinned = true;
+      spte->pinned = false;
       spte->in_memory = true;
       spte->in_swap = false;
       spte->on_disk = false;

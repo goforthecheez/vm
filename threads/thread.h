@@ -132,7 +132,7 @@ struct child
 struct sup_page_table_entry
   {
     void *upage;                /* First user virtual address of page. */
-    bool replaceable;           /* If true, page can be replaced. */
+    bool pinned;                /* If true, page cannot be evicted. */
     struct hash_elem elem;      /* Hashtable element. */
     bool in_memory;             /* If true, page is in RAM. */
     bool in_swap;               /* If true, page is in swap. */

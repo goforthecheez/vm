@@ -480,7 +480,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           struct sup_page_table_entry *)malloc (
               sizeof (struct sup_page_table_entry));
       spte->upage = upage;
-      spte->replaceable = true;
+      spte->pinned = false;
       spte->in_memory = false;
       spte->in_swap = false;
       spte->on_disk = true;
@@ -524,7 +524,7 @@ setup_stack (void **esp, char **argv, int argc)
               sizeof (struct sup_page_table_entry));
       uint8_t *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
       spte->upage = upage;
-      spte->replaceable = false;
+      spte->pinned = true;
       spte->in_memory = true;
       spte->in_swap = false;
       spte->on_disk = false;

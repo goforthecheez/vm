@@ -126,6 +126,18 @@ struct child
     int exit_status;            /* If process is done, its exit status. */
     struct hash_elem elem;      /* Hashtable element. */
   };
+
+/* A supplemental page table entry. */
+struct sup_page_table_entry
+  {
+    uint32_t vaddr;             /* First (virtual) address of page. */
+    struct hash_elem elem;      /* Hashtable element. */
+    bool in_memory;             /* If true, page is in RAM. */
+    bool in_swap;               /* If true, page is in swap. */
+    bool on_disk;               /* If true, page is on disk. */
+    struct file *file           /* File where page resides, or NULL. */
+    unsigned offset;            /* File offset where page begins. */
+  };
 #endif
 
 /* If false (default), use round-robin scheduler.

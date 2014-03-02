@@ -110,6 +110,7 @@ struct thread
     struct hash *open_files;            /* Files opened by this process. */
     struct file *my_executable;         /* Executable file this process is
                                            running. */
+    struct hash *sup_page_table;        /* The supplemental page table. */
 #endif
 
     /* Owned by thread.c. */

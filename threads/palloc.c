@@ -110,7 +110,8 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
         PANIC ("palloc_get: out of pages");
     }
 
-  /* Create page table entries for the allocated user pages. */
+  /* Create page table entries for the allocated user pages. Initially,
+     pages are read-only. */
   if (pool == &user_pool)
     {
       unsigned i;
@@ -119,7 +120,7 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
           struct frame_table_entry *fte = &(pool->entries[page_idx + i]);
           fte->valid = true;
           fte->pid = thread_current ()->tid;
-          fte->pte = pte_create_user (pages + PGSIZE * i, true);
+          fte->pte = pte_create_user (pages + PGSIZE * i, false);
 	}
     }
   lock_release (&pool->lock);

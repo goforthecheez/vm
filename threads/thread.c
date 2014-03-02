@@ -74,8 +74,12 @@ static bool child_hash_less_func (const struct hash_elem *,
 static unsigned file_hash_hash_func (const struct hash_elem *, void * UNUSED);
 static bool file_hash_less_func (const struct hash_elem *,
                                  const struct hash_elem *, void * UNUSED);
+static unsigned spte_hash_hash_func (const struct hash_elem *, void * UNUSED);
+static bool spte_hash_less_func (const struct hash_elem *,
+                                 const struct hash_elem *, void * UNUSED);
 void hash_destroy_child (struct hash_elem *, void * UNUSED);
 void hash_destroy_file (struct hash_elem *, void * UNUSED);
+void hash_destroy_spte (struct hash_elem *, void * UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -127,10 +131,13 @@ thread_start (void)
      initial thread's children and open_files hashtables. */
   initial_thread->children = (struct hash *)malloc (sizeof (struct hash));
   initial_thread->open_files = (struct hash *)malloc (sizeof (struct hash));
+  initial_thread->sup_page_table = (struct hash*)malloc (sizeof (struct hash));
   hash_init (initial_thread->children, child_hash_hash_func,
              child_hash_less_func, NULL);
   hash_init (initial_thread->open_files, file_hash_hash_func,
              file_hash_less_func, NULL);
+  hash_init (initial_thread->sup_page_table, spte_hash_hash_func,
+             spte_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -227,10 +234,13 @@ thread_create (const char *name, int priority,
       /* Initialize hashtables. */
       t->children = (struct hash *)malloc (sizeof (struct hash));
       t->open_files = (struct hash *)malloc (sizeof (struct hash));
+      t->sup_page_table = (struct hash *)malloc (sizeof (struct hash));
       hash_init (t->children, child_hash_hash_func,
                  child_hash_less_func, NULL);
       hash_init (t->open_files, file_hash_hash_func,
                  file_hash_less_func, NULL);
+      hash_init (t->sup_page_table, spte_hash_hash_func,
+                 spte_hash_less_func, NULL);
 
       /* Register thread as its parent's child. */
       struct child *c = (struct child *)malloc (sizeof (struct child));
@@ -334,8 +344,10 @@ thread_exit (void)
   /* Free the current thread. */
   hash_destroy (t->children, hash_destroy_child);
   hash_destroy (t->open_files, hash_destroy_file);
+  hash_destroy (t->sup_page_table, hash_destroy_spte);
   free (t->children);
   free (t->open_files);
+  free (t->sup_page_table);
   if (t->my_executable != NULL)
     file_close (t->my_executable);
 #endif
@@ -509,7 +521,7 @@ child_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 
 static bool
 child_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
-                         void * aux UNUSED)
+                      void *aux UNUSED)
 {
   struct child *c = hash_entry (a, struct child, elem);
   struct child *d = hash_entry (b, struct child, elem);
@@ -525,11 +537,30 @@ file_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 
 static bool
 file_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
-                         void * aux UNUSED)
+                     void *aux UNUSED)
 {
   struct file *c = hash_entry (a, struct file, elem);
   struct file *d = hash_entry (b, struct file, elem);
   return c->fd < d->fd;
+}
+
+static unsigned
+spte_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
+{
+  struct sup_page_table_entry *spte = hash_entry (
+      e, struct sup_page_table_entry, elem);
+  return spte->vaddr;
+}
+
+static bool
+spte_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
+                     void *aux UNUSED)
+{
+  struct sup_page_table_entry *c = hash_entry (
+      a, struct sup_page_table_entry, elem);
+  struct sup_page_table_entry *d = hash_entry (
+      b, struct sup_page_table_entry, elem);
+  return c->vaddr < d->vaddr;
 }
 
 void
@@ -546,6 +577,13 @@ hash_destroy_file (struct hash_elem *e, void *aux UNUSED)
   lock_acquire (&filesys_lock);
   file_close (f);
   lock_release (&filesys_lock);
+}
+
+void
+hash_destroy_spte (struct hash_elem *e, void *aux UNUSED)
+{
+  struct sup_page_tage_entry *spte = hash_entry (e, struct file, elem);
+  free (spte);
 }
 
 /* Does basic initialization of T as a blocked thread named

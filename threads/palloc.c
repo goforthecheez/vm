@@ -34,8 +34,7 @@ struct pool
     struct lock lock;                    /* Mutual exclusion. */
     struct bitmap *used_map;             /* Bitmap of free pages. */
     uint8_t *base;                       /* Base of pool. */
-    struct frame_table_entry *entries;  /* Array of frame table
-                                            entries. */
+    struct frame_table_entry *entries;   /* Array of frame table entries. */
   };
 
 /* Each frame table entry contains the virtual page mapped to it. */
@@ -110,8 +109,7 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
         PANIC ("palloc_get: out of pages");
     }
 
-  /* Create page table entries for the allocated user pages. Initially,
-     pages are read-only. */
+  /* Create page table entries for the allocated user pages. */
   if (pool == &user_pool)
     {
       unsigned i;
@@ -120,7 +118,7 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
           struct frame_table_entry *fte = &(pool->entries[page_idx + i]);
           fte->valid = true;
           fte->pid = thread_current ()->tid;
-          fte->pte = pte_create_user (pages + PGSIZE * i, false);
+          fte->pte = pte_create_kernel (pages + PGSIZE * i, true);
 	}
     }
   lock_release (&pool->lock);

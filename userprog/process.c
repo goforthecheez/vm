@@ -67,7 +67,7 @@ process_execute (const char *cmd_line)
   palloc_free_page (file_name_copy);
 
   if (tid == TID_ERROR)
-      palloc_free_page (load_copy);
+    palloc_free_page (load_copy);
 
   return tid;
 }
@@ -400,8 +400,6 @@ load (char *cmd_line, void (**eip) (void), void **esp)
 
 /* load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
-
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
 static bool
@@ -469,7 +467,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -478,31 +475,35 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
-
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      /* Create supplemental page table entry. */
+      struct sup_page_table_entry *spte = (
+          struct sup_page_table_entry *)malloc (
+              sizeof (struct sup_page_table_entry));
+      spte->upage = upage;
+      spte->replaceable = true;
+      spte->in_memory = false;
+      spte->in_swap = false;
+      spte->on_disk = true;
+      spte->file = file;
+      spte->ofs = ofs;
+      spte->page_read_bytes = page_read_bytes;
+      spte->page_zero_bytes = page_zero_bytes;
+      spte->writable = writable;
+      struct hash_elem *inserted = hash_insert (
+          thread_current ()->sup_page_table, &(spte->elem));
+      if (inserted != NULL)
         {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
+          printf ("Error: Creating duplicate supplemental page table entry.");
+          return false;
         }
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      ofs += PGSIZE;
     }
+
   return true;
 }
 
@@ -517,7 +518,25 @@ setup_stack (void **esp, char **argv, int argc)
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      /* Create supplemental page table entry. */
+      struct sup_page_table_entry *spte = (
+          struct sup_page_table_entry *)malloc (
+              sizeof (struct sup_page_table_entry));
+      uint8_t *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
+      spte->upage = upage;
+      spte->replaceable = false;
+      spte->in_memory = true;
+      spte->in_swap = false;
+      spte->on_disk = false;
+      struct hash_elem *inserted = hash_insert (
+          thread_current ()->sup_page_table, &(spte->elem));
+      if (inserted != NULL)
+        {
+          printf ("Error: Creating duplicate supplemental page table entry.");
+          return false;
+        }      
+
+      success = install_page (upage, kpage, true);
       if (success)
         {
           *esp = PHYS_BASE;
@@ -578,7 +597,7 @@ setup_stack (void **esp, char **argv, int argc)
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
-static bool
+bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();

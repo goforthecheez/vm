@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include <hash.h>
+#include "filesys/file.h"
 #include "threads/synch.h"
 
 /* States in a thread's life cycle. */
@@ -130,13 +131,17 @@ struct child
 /* A supplemental page table entry. */
 struct sup_page_table_entry
   {
-    uint32_t vaddr;             /* First (virtual) address of page. */
+    void *upage;                /* First user virtual address of page. */
+    bool replaceable;           /* If true, page can be replaced. */
     struct hash_elem elem;      /* Hashtable element. */
     bool in_memory;             /* If true, page is in RAM. */
     bool in_swap;               /* If true, page is in swap. */
     bool on_disk;               /* If true, page is on disk. */
-    struct file *file           /* File where page resides, or NULL. */
-    unsigned offset;            /* File offset where page begins. */
+    struct file *file;          /* File where page resides, or NULL. */
+    off_t ofs;                  /* File offset where page begins. */
+    uint32_t page_read_bytes;   /* Number of file data bytes in page. */
+    uint32_t page_zero_bytes;   /* Number of zeroed bytes in page. */
+    bool writable;              /* If true, page is writable. */
   };
 #endif
 

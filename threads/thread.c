@@ -549,7 +549,7 @@ spte_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 {
   struct sup_page_table_entry *spte = hash_entry (
       e, struct sup_page_table_entry, elem);
-  return spte->vaddr;
+  return (unsigned)spte->upage;
 }
 
 static bool
@@ -560,7 +560,7 @@ spte_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
       a, struct sup_page_table_entry, elem);
   struct sup_page_table_entry *d = hash_entry (
       b, struct sup_page_table_entry, elem);
-  return c->vaddr < d->vaddr;
+  return c->upage < d->upage;
 }
 
 void
@@ -582,7 +582,8 @@ hash_destroy_file (struct hash_elem *e, void *aux UNUSED)
 void
 hash_destroy_spte (struct hash_elem *e, void *aux UNUSED)
 {
-  struct sup_page_tage_entry *spte = hash_entry (e, struct file, elem);
+  struct sup_page_table_entry *spte = hash_entry (
+      e, struct sup_page_table_entry, elem);
   free (spte);
 }
 

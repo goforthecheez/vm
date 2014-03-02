@@ -1,10 +1,15 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include "lib/kernel/hash.h"
+#include "lib/string.h"
 #include "userprog/gdt.h"
+#include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "threads/interrupt.h"
+#include "threads/palloc.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -149,14 +154,62 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+  /* Page in a faulting page from disk. */
+  if (not_present)
+    {
+      /* Find faulting page in supplemental page table. */
+      void *page = pg_round_down (fault_addr);
+      struct sup_page_table_entry spte_temp;
+      spte_temp.upage = page;
+      struct hash_elem *e = hash_find (thread_current ()->sup_page_table,
+                                       &(spte_temp.elem));
+
+      /* If no supplemental page table entry is found, really page fault. */
+      if (e == NULL)
+        {
+          printf ("Page fault at %p: %s error %s page in %s context.\n",
+                  fault_addr,
+                  not_present ? "not present" : "rights violation",
+                  write ? "writing" : "reading",
+                  user ? "user" : "kernel");
+          kill (f);
+        }
+
+      uint8_t *kpage = palloc_get_page (PAL_USER);
+      if (kpage == NULL)
+        kill (f);
+
+      /* Load this page into memory from disk. */
+      struct sup_page_table_entry *spte = hash_entry (
+          e, struct sup_page_table_entry, elem);
+      file_seek (spte->file, spte->ofs);
+      if (file_read (spte->file, kpage, spte->page_read_bytes)
+          != (int) spte->page_read_bytes)
+      	{
+          palloc_free_page (kpage);
+          kill (f);
+        }
+      memset (kpage + spte->page_read_bytes, 0, spte->page_zero_bytes);
+
+      /* Add the page to the process's address space. */
+      if (!install_page (spte->upage, kpage, spte->writable))
+        {
+          palloc_free_page (kpage);
+          kill (f);
+        }
+
+      /* Update supplemental page table entry. */
+      spte->in_memory = true;
+      spte->on_disk = false;
+    }
+  else
+    {
+      printf ("Page fault at %p: %s error %s page in %s context.\n",
+              fault_addr,
+              not_present ? "not present" : "rights violation",
+              write ? "writing" : "reading",
+              user ? "user" : "kernel");
+      kill (f);
+    }
 }
 

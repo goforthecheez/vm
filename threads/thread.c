@@ -16,6 +16,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -79,7 +80,6 @@ static bool spte_hash_less_func (const struct hash_elem *,
                                  const struct hash_elem *, void * UNUSED);
 void hash_destroy_child (struct hash_elem *, void * UNUSED);
 void hash_destroy_file (struct hash_elem *, void * UNUSED);
-void hash_destroy_spte (struct hash_elem *, void * UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -344,12 +344,8 @@ thread_exit (void)
   /* Free the current thread. */
   hash_destroy (t->children, hash_destroy_child);
   hash_destroy (t->open_files, hash_destroy_file);
-  hash_destroy (t->sup_page_table, hash_destroy_spte);
   free (t->children);
   free (t->open_files);
-  free (t->sup_page_table);
-  if (t->my_executable != NULL)
-    file_close (t->my_executable);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,

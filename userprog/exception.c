@@ -7,6 +7,7 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -164,22 +165,54 @@ page_fault (struct intr_frame *f)
       struct hash_elem *e = hash_find (thread_current ()->sup_page_table,
                                        &(spte_temp.elem));
 
-      /* If no supplemental page table entry is found, really page fault. */
+      uint8_t *kpage;
       if (e == NULL)
         {
-          printf ("Page fault at %p: %s error %s page in %s context.\n",
-                  fault_addr,
-                  not_present ? "not present" : "rights violation",
-                  write ? "writing" : "reading",
-                  user ? "user" : "kernel");
-          kill (f);
+          /* If no supplemental page table entry is found, maybe we need
+           to grow the stack. */
+          if ((uintptr_t)fault_addr - (uintptr_t)f->esp <= 32)
+ 	    {
+              kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+
+              struct sup_page_table_entry *spte = (
+                  struct sup_page_table_entry *) malloc (
+                      sizeof (struct sup_page_table_entry));
+              uint8_t *upage = (pg_round_down (f->esp));
+              spte->upage = upage;
+              spte->pinned = false;
+              spte->in_memory = true;
+              spte->in_swap = false;
+              spte->on_disk = false;
+              struct hash_elem *inserted = hash_insert (
+                  thread_current ()->sup_page_table, &(spte->elem));
+
+              if (inserted != NULL)
+                kill (f);
+
+              if (!install_page (spte->upage, kpage, spte->writable))
+                {
+                  palloc_free_page (kpage);
+                  kill (f);
+                }
+              return;
+            }
+          /* Otherwise, we have a real page fault. Inform user and die. */
+          else
+	    {
+              printf ("Page fault at %p: %s error %s page in %s context.\n",
+                      fault_addr,
+                      not_present ? "not present" : "rights violation",
+                      write ? "writing" : "reading",
+                      user ? "user" : "kernel");
+              kill (f);
+            }
         }
 
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      kpage = palloc_get_page (PAL_USER);
       if (kpage == NULL)
         kill (f);
 
-      /* Load this page into memory from disk. */
+      /* Load the executable page into memory from disk. */
       struct sup_page_table_entry *spte = hash_entry (
           e, struct sup_page_table_entry, elem);
       file_seek (spte->file, spte->ofs);
@@ -212,4 +245,3 @@ page_fault (struct intr_frame *f)
       kill (f);
     }
 }
-

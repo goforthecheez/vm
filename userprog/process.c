@@ -25,6 +25,8 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (char *cmdline, void (**eip) (void), void **esp);
+void write_dirty_page_to_disk (struct hash_elem *e, void *aux UNUSED);
+
 
 /* Starts a new thread running a user program loaded from
    CMD_LINE.  The new thread may be scheduled (and may even exit)
@@ -161,11 +163,19 @@ process_exit (void)
   int status = found_child->exit_status;
   printf ("%s: exit(%d)\n", t->name, status);
 
+  if (t->my_executable != NULL)
+    file_close (t->my_executable);
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = t->pagedir;
   if (pd != NULL) 
     {
+      /* Write dirty pages to disk. */
+      hash_apply (t->sup_page_table, write_dirty_page_to_disk);
+      hash_destroy(t->sup_page_table, hash_destroy_spte);
+      free (t->sup_page_table);
+
       /* Correct ordering here is crucial.  We must set
          cur->pagedir to NULL before switching page directories,
          so that a timer interrupt can't switch back to the
@@ -176,6 +186,29 @@ process_exit (void)
       t->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
+    }
+}
+
+/* If the given hash_elem corresponds to a dirty page, write the
+   page to disk. Otherwise, do nothing. */
+void
+write_dirty_page_to_disk (struct hash_elem *e, void *aux UNUSED)
+{
+  struct thread *t = thread_current ();
+  struct sup_page_table_entry *spte = (
+      struct sup_page_table_entry *) hash_entry (
+          e, struct sup_page_table_entry, elem);
+
+  /* Write mmapped file back to disk. */
+  if (spte->in_memory && spte->mmapped
+      && pagedir_is_dirty (t->pagedir, spte->upage))
+    {
+      lock_acquire (&filesys_lock);
+      file_seek (spte->file, spte->ofs);
+      file_write (spte->file,
+                  pagedir_get_page (t->pagedir, spte->upage),
+                  spte->page_read_bytes);
+      lock_release (&filesys_lock);
     }
 }
 
@@ -484,6 +517,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       spte->in_memory = false;
       spte->in_swap = false;
       spte->on_disk = true;
+      spte->mmapped = false;
       spte->file = file;
       spte->ofs = ofs;
       spte->page_read_bytes = page_read_bytes;
@@ -492,10 +526,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       struct hash_elem *inserted = hash_insert (
           thread_current ()->sup_page_table, &(spte->elem));
       if (inserted != NULL)
-        {
-          printf ("Error: Creating duplicate supplemental page table entry.");
-          return false;
-        }
+        return false;
 
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -531,10 +562,7 @@ setup_stack (void **esp, char **argv, int argc)
       struct hash_elem *inserted = hash_insert (
           thread_current ()->sup_page_table, &(spte->elem));
       if (inserted != NULL)
-        {
-          printf ("Error: Creating duplicate supplemental page table entry.");
           return false;
-        }      
 
       success = install_page (upage, kpage, true);
       if (success)

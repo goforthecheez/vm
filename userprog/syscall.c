@@ -31,8 +31,12 @@ int write (int, const void*, unsigned);
 void seek (int, unsigned);
 unsigned tell (int);
 void close (int);
+int mmap (int fd, void *addr);
+void munmap (int);
+
 void check_args (void *, void *, void *);
 struct file *lookup_fd (int);
+void clear_mappings (struct hash_elem *e, void *aux);
 
 void
 syscall_init (void) 
@@ -61,23 +65,23 @@ syscall_handler (struct intr_frame *f UNUSED)
         break;
       case SYS_EXEC:
         check_args (ARG_ONE, NULL, NULL);
-        f->eax = exec (*(char **)ARG_ONE);
+        f->eax = exec (*(char **) ARG_ONE);
         break;
       case SYS_WAIT:
         check_args (ARG_ONE, NULL, NULL);
-        f->eax = wait (*(unsigned *)ARG_ONE);
+        f->eax = wait (*(unsigned *) ARG_ONE);
         break;
       case SYS_CREATE:
         check_args (ARG_ONE, ARG_TWO, NULL);
-        f->eax = create (*(char **)ARG_ONE, *(unsigned *)ARG_TWO);
+        f->eax = create (*(char **) ARG_ONE, *(unsigned *) ARG_TWO);
         break;
-    case SYS_REMOVE:
+      case SYS_REMOVE:
         check_args (ARG_ONE, NULL, NULL);
-        f->eax = remove (*(char **)ARG_ONE);
+        f->eax = remove (*(char **) ARG_ONE);
         break;
       case SYS_OPEN:
         check_args (ARG_ONE, NULL, NULL);
-	f->eax = open (*(char **)ARG_ONE);
+	f->eax = open (*(char **) ARG_ONE);
         break;
       case SYS_FILESIZE:
         check_args (ARG_ONE, NULL, NULL);
@@ -85,11 +89,11 @@ syscall_handler (struct intr_frame *f UNUSED)
         break;
       case SYS_READ:
         check_args (ARG_ONE, ARG_TWO, ARG_THREE);
-	f->eax = read (*ARG_ONE, *(char **)ARG_TWO, *(unsigned *)ARG_THREE);
+	f->eax = read (*ARG_ONE, *(char **) ARG_TWO, *(unsigned *) ARG_THREE);
         break;
       case SYS_WRITE:
         check_args (ARG_ONE, ARG_TWO, ARG_THREE);
-	f->eax = write (*ARG_ONE, *(char **)ARG_TWO, *(unsigned *)ARG_THREE);
+	f->eax = write (*ARG_ONE, *(char **) ARG_TWO, *(unsigned *) ARG_THREE);
         break;
       case SYS_TELL:
         check_args (ARG_ONE, NULL, NULL);
@@ -97,11 +101,17 @@ syscall_handler (struct intr_frame *f UNUSED)
         break;
       case SYS_SEEK:
         check_args (ARG_ONE, ARG_TWO, NULL);
-        seek (*ARG_ONE, *(unsigned *)ARG_TWO);
+        seek (*ARG_ONE, *(unsigned *) ARG_TWO);
         break;
       case SYS_CLOSE:
         check_args (ARG_ONE, NULL, NULL);
         close (*ARG_ONE);
+        break;
+      case SYS_MMAP:
+        f->eax = mmap (*ARG_ONE, *(uint8_t **) ARG_TWO);
+        break;
+      case SYS_MUNMAP:
+        munmap (*ARG_ONE);
         break;
       default:
         exit (-1);
@@ -359,6 +369,70 @@ void close (int fd)
   lock_release (&filesys_lock);
 }
 
+/* Maps the file open as fd into the process's virtual address space. The
+   entire file is mapped into consecutive virtual pages starting at addr. */
+int
+mmap (int fd, void *addr)
+{
+  if (fd == 0 || fd == 1)
+    return -1;
+
+  if (addr == 0)
+    return -1;
+
+  if (pg_round_down (addr) != addr)
+    return -1;
+
+  int size = filesize (fd);
+  off_t ofs = 0;
+  while (size > 0)
+    {
+      /* Calculate how to fill this page.
+         We will read PAGE_READ_BYTES bytes from FILE     
+         and zero the final PAGE_ZERO_BYTES bytes. */
+      size_t page_read_bytes = size < PGSIZE ? size : PGSIZE;
+      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+      /* Create supplemental page table entry. */
+      struct sup_page_table_entry *spte = (
+          struct sup_page_table_entry *)malloc (
+              sizeof (struct sup_page_table_entry));
+      spte->upage = addr;
+      spte->pinned = false;
+      spte->in_memory = false;
+      spte->in_swap = false;
+      spte->on_disk = true;
+      spte->mmapped = true;
+      spte->file = lookup_fd (fd);
+      spte->ofs = ofs;
+      spte->page_read_bytes = page_read_bytes;
+      spte->page_zero_bytes = page_zero_bytes;
+      spte->writable = true;
+      struct hash_elem *inserted = hash_insert (
+          thread_current ()->sup_page_table, &(spte->elem));
+      if (inserted != NULL)
+	return -1;
+
+      /* Advance. */
+      size -= page_read_bytes;
+      addr = (uint8_t *) addr + PGSIZE;
+      ofs += PGSIZE;
+    }
+  return fd;
+}
+
+/* Unmaps the mapping designated by mapping, which must be a mapping ID
+   returned by a previous call to mmap by the same process that has not yet
+   been unmapped. */
+void
+munmap (int mapping)
+{
+  struct thread *t = thread_current ();
+  t->sup_page_table->aux = mapping;
+
+  hash_apply (t->sup_page_table, clear_mappings);
+}
+
 /* Verify that the passed syscall arguments are valid pointers.
    If not, exit(-1) the user program with an kernel error. */
 void
@@ -391,4 +465,18 @@ lookup_fd (int fd)
   struct file *f = hash_entry (e, struct file, elem);
 
   return f;
+}
+
+void
+clear_mappings (struct hash_elem *e, void *aux)
+{
+  struct thread *t = thread_current ();
+  struct sup_page_table_entry *spte = (
+      struct sup_page_table_entry *) hash_entry (
+          e, struct sup_page_table_entry, elem);
+
+  if (lookup_fd ((int) aux) == spte->file)
+    pagedir_clear_page (t->pagedir, spte->upage);
+  hash_delete (t->sup_page_table, &(spte->elem));
+  free (spte);
 }

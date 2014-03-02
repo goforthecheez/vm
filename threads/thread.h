@@ -137,6 +137,7 @@ struct sup_page_table_entry
     bool in_memory;             /* If true, page is in RAM. */
     bool in_swap;               /* If true, page is in swap. */
     bool on_disk;               /* If true, page is on disk. */
+    bool mmapped;               /* If true, this is an mmapped page. */
     struct file *file;          /* File where page resides, or NULL. */
     off_t ofs;                  /* File offset where page begins. */
     uint32_t page_read_bytes;   /* Number of file data bytes in page. */
@@ -180,5 +181,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+void hash_destroy_spte (struct hash_elem *, void * UNUSED);
 
 #endif /* threads/thread.h */
